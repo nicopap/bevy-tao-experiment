@@ -12,12 +12,8 @@ mod converters;
 mod system;
 mod tao_config;
 mod tao_windows;
-#[cfg(target_arch = "wasm32")]
-mod web_resize;
 
-use bevy::a11y::AccessibilityRequested;
 use bevy::ecs::system::{SystemParam, SystemState};
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::tasks::tick_global_task_pools_on_main_thread;
 use system::{changed_window, create_window, despawn_window, CachedWindow};
 
@@ -31,22 +27,16 @@ use bevy::input::{
     keyboard::KeyboardInput,
     mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
     touch::TouchInput,
-    touchpad::{TouchpadMagnify, TouchpadRotate},
 };
+use bevy::log::{error, info, trace, warn};
 use bevy::math::{ivec2, DVec2, Vec2};
-use bevy::utils::{
-    tracing::{trace, warn},
-    Instant,
-};
+use bevy::utils::Instant;
 use bevy::window::{
-    exit_on_all_closed, CursorEntered, CursorLeft, CursorMoved, FileDragAndDrop, Ime,
-    ReceivedCharacter, RequestRedraw, Window, WindowBackendScaleFactorChanged,
-    WindowCloseRequested, WindowCreated, WindowDestroyed, WindowFocused, WindowMoved,
-    WindowResized, WindowScaleFactorChanged, WindowThemeChanged,
+    exit_on_all_closed, CursorEntered, CursorLeft, CursorMoved, FileDragAndDrop, ReceivedCharacter,
+    RequestRedraw, Window, WindowBackendScaleFactorChanged, WindowCloseRequested, WindowCreated,
+    WindowDestroyed, WindowFocused, WindowMoved, WindowResized, WindowScaleFactorChanged,
+    WindowThemeChanged,
 };
-
-#[cfg(target_os = "android")]
-pub use wry::application::platform::android::activity::AndroidApp;
 
 use wry::application::{
     event::{self, DeviceEvent, Event, StartCause, WindowEvent},
@@ -58,12 +48,6 @@ use wry::application::{
 // };
 
 use converters::convert_tao_theme;
-#[cfg(target_arch = "wasm32")]
-use web_resize::{CanvasParentResizeEventChannel, CanvasParentResizePlugin};
-
-/// [`AndroidApp`] provides an interface to query the application state as well as monitor events (for example lifecycle and input events)
-#[cfg(target_os = "android")]
-pub static ANDROID_APP: std::sync::OnceLock<AndroidApp> = std::sync::OnceLock::new();
 
 /// A [`Plugin`] that utilizes [`wry::application`] for window creation and event loop management.
 #[derive(Default)]
@@ -71,20 +55,7 @@ pub struct TaoPlugin;
 
 impl Plugin for TaoPlugin {
     fn build(&self, app: &mut App) {
-        let mut event_loop_builder = EventLoop::<()>::with_user_event();
-
-        #[cfg(target_os = "android")]
-        {
-            use wry::application::platform::android::EventLoopBuilderExtAndroid;
-            event_loop_builder.with_android_app(
-                ANDROID_APP
-                    .get()
-                    .expect("Bevy must be setup with the #[bevy::main] macro on Android")
-                    .clone(),
-            );
-        }
-
-        let event_loop = event_loop_builder;
+        let event_loop = EventLoop::<()>::with_user_event();
         app.insert_non_send_resource(event_loop);
 
         app.init_non_send_resource::<TaoWindows>()
@@ -101,64 +72,22 @@ impl Plugin for TaoPlugin {
                 ),
             );
 
-        #[cfg(target_arch = "wasm32")]
-        app.add_plugins(CanvasParentResizePlugin);
-
-        #[cfg(not(target_arch = "wasm32"))]
         let mut create_window_system_state: SystemState<(
             Commands,
             NonSendMut<EventLoop<()>>,
             Query<(Entity, &mut Window)>,
             EventWriter<WindowCreated>,
             NonSendMut<TaoWindows>,
-            // NonSendMut<AccessKitAdapters>,
-            // ResMut<taoActionHandlers>,
-            ResMut<AccessibilityRequested>,
-        )> = SystemState::from_world(&mut app.world);
-
-        #[cfg(target_arch = "wasm32")]
-        let mut create_window_system_state: SystemState<(
-            Commands,
-            NonSendMut<EventLoop<()>>,
-            Query<(Entity, &mut Window)>,
-            EventWriter<WindowCreated>,
-            NonSendMut<TaoWindows>,
-            // NonSendMut<AccessKitAdapters>,
-            // ResMut<taoActionHandlers>,
-            ResMut<AccessibilityRequested>,
-            ResMut<CanvasParentResizeEventChannel>,
         )> = SystemState::from_world(&mut app.world);
 
         // And for ios and macos, we should not create window early, all ui related code should be executed inside
         // UIApplicationMain/NSApplicationMain.
         #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
         {
-            #[cfg(not(target_arch = "wasm32"))]
-            let (
-                commands,
-                event_loop,
-                mut new_windows,
-                event_writer,
-                tao_windows,
-                // adapters,
-                // handlers,
-                accessibility_requested,
-            ) = create_window_system_state.get_mut(&mut app.world);
+            let (commands, event_loop, mut new_windows, event_writer, tao_windows) =
+                create_window_system_state.get_mut(&mut app.world);
 
-            #[cfg(target_arch = "wasm32")]
-            let (
-                commands,
-                event_loop,
-                mut new_windows,
-                event_writer,
-                tao_windows,
-                // adapters,
-                // handlers,
-                accessibility_requested,
-                event_channel,
-            ) = create_window_system_state.get_mut(&mut app.world);
-
-            // Here we need to create a wry::application-window and give it a WindowHandle which the renderer can use.
+            // Here we need to create a tao window and give it a WindowHandle which the renderer can use.
             // It needs to be spawned before the start of the startup schedule, so we cannot use a regular system.
             // Instead we need to create the window and spawn it using direct world access
             create_window(
@@ -167,11 +96,6 @@ impl Plugin for TaoPlugin {
                 new_windows.iter_mut(),
                 event_writer,
                 tao_windows,
-                // adapters,
-                // handlers,
-                accessibility_requested,
-                #[cfg(target_arch = "wasm32")]
-                event_channel,
             );
         }
 
@@ -239,11 +163,8 @@ struct InputEvents<'w> {
     keyboard_input: EventWriter<'w, KeyboardInput>,
     character_input: EventWriter<'w, ReceivedCharacter>,
     mouse_button_input: EventWriter<'w, MouseButtonInput>,
-    touchpad_magnify_input: EventWriter<'w, TouchpadMagnify>,
-    touchpad_rotate_input: EventWriter<'w, TouchpadRotate>,
     mouse_wheel_input: EventWriter<'w, MouseWheel>,
     touch_input: EventWriter<'w, TouchInput>,
-    ime_input: EventWriter<'w, Ime>,
 }
 
 #[derive(SystemParam)]
@@ -292,7 +213,7 @@ impl Default for TaoPersistentState {
 
 /// The default [`App::runner`] for the [`TaoPlugin`] plugin.
 ///
-/// Overriding the app's [runner](bevy::app::App::runner) while using `taoPlugin` will bypass the `EventLoop`.
+/// Overriding the app's [runner](bevy::app::App::runner) while using `TaoPlugin` will bypass the `EventLoop`.
 pub fn tao_runner(mut app: App) {
     // We remove this so that we have ownership over it.
     let mut event_loop = app
@@ -308,32 +229,13 @@ pub fn tao_runner(mut app: App) {
 
     let return_from_run = app.world.resource::<TaoSettings>().return_from_run;
 
-    trace!("Entering wry::application event loop");
+    trace!("Entering tao event loop");
 
-    let mut focused_window_state: SystemState<(Res<TaoSettings>, Query<&Window>)> =
-        SystemState::from_world(&mut app.world);
-
-    #[cfg(not(target_arch = "wasm32"))]
     let mut create_window_system_state: SystemState<(
         Commands,
         Query<(Entity, &mut Window), Added<Window>>,
         EventWriter<WindowCreated>,
         NonSendMut<TaoWindows>,
-        // NonSendMut<AccessKitAdapters>,
-        // ResMut<TaoActionHandlers>,
-        ResMut<AccessibilityRequested>,
-    )> = SystemState::from_world(&mut app.world);
-
-    #[cfg(target_arch = "wasm32")]
-    let mut create_window_system_state: SystemState<(
-        Commands,
-        Query<(Entity, &mut Window), Added<Window>>,
-        EventWriter<WindowCreated>,
-        NonSendMut<TaoWindows>,
-        // NonSendMut<AccessKitAdapters>,
-        // ResMut<taoActionHandlers>,
-        ResMut<AccessibilityRequested>,
-        ResMut<CanvasParentResizeEventChannel>,
     )> = SystemState::from_world(&mut app.world);
 
     let mut finished_and_setup_done = false;
@@ -346,12 +248,12 @@ pub fn tao_runner(mut app: App) {
 
         if !finished_and_setup_done {
             if !app.ready() {
-                #[cfg(not(target_arch = "wasm32"))]
                 tick_global_task_pools_on_main_thread();
             } else {
                 app.finish();
                 app.cleanup();
                 finished_and_setup_done = true;
+                info!("Completed setting up app");
             }
         }
 
@@ -364,26 +266,14 @@ pub fn tao_runner(mut app: App) {
 
         match event {
             event::Event::NewEvents(start) => {
-                let (tao_config, window_focused_query) = focused_window_state.get(&app.world);
-
-                let app_focused = window_focused_query.iter().any(|window| window.focused);
-
-                // Check if either the `WaitUntil` timeout was triggered by wry::application, or that same
+                // Check if either the `WaitUntil` timeout was triggered by tao, or that same
                 // amount of time has elapsed since the last app update. This manual check is needed
                 // because we don't know if the criteria for an app update were met until the end of
                 // the frame.
                 let auto_timeout_reached = matches!(start, StartCause::ResumeTimeReached { .. });
-                let now = Instant::now();
-                let manual_timeout_reached = match tao_config.update_mode(app_focused) {
-                    UpdateMode::Continuous => false,
-                    UpdateMode::Reactive { max_wait }
-                    | UpdateMode::ReactiveLowPower { max_wait } => {
-                        now.duration_since(tao_state.last_update) >= *max_wait
-                    }
-                };
                 // The low_power_event state and timeout must be reset at the start of every frame.
                 tao_state.low_power_event = false;
-                tao_state.timeout_reached = auto_timeout_reached || manual_timeout_reached;
+                tao_state.timeout_reached = auto_timeout_reached;
             }
             event::Event::WindowEvent {
                 event,
@@ -413,7 +303,7 @@ pub fn tao_runner(mut app: App) {
                     if let Some(entity) = tao_windows.get_window_entity(tao_window_id) {
                         entity
                     } else {
-                        warn!(
+                        error!(
                             "Skipped event {:?} for unknown wry::application Window Id {:?}",
                             event, tao_window_id
                         );
@@ -424,7 +314,7 @@ pub fn tao_runner(mut app: App) {
                     if let Ok((window, info)) = window_query.get_mut(window_entity) {
                         (window, info)
                     } else {
-                        warn!(
+                        error!(
                             "Window {:?} is missing `Window` component, skipping event {:?}",
                             window_entity, event
                         );
@@ -519,7 +409,6 @@ pub fn tao_runner(mut app: App) {
                     WindowEvent::Touch(touch) => {
                         let location = touch.location.to_logical(window.resolution.scale_factor());
 
-                        // Event
                         input_events
                             .touch_input
                             .send(converters::convert_touch_input(touch, location));
@@ -668,61 +557,18 @@ pub fn tao_runner(mut app: App) {
             }
             event::Event::Suspended => {
                 tao_state.active = false;
-                #[cfg(target_os = "android")]
-                {
-                    // Bevy doesn't support suspend/resume so we just exit
-                    // and Android will restart the application on resume
-                    // TODO: Save save some state and load on resume
-                    *control_flow = ControlFlow::Exit;
-                }
             }
             event::Event::Resumed => {
                 tao_state.active = true;
             }
             event::Event::MainEventsCleared => {
-                let (tao_config, window_focused_query) = focused_window_state.get(&app.world);
-
-                let update = if tao_state.active {
-                    // True if _any_ windows are currently being focused
-                    let app_focused = window_focused_query.iter().any(|window| window.focused);
-                    match tao_config.update_mode(app_focused) {
-                        UpdateMode::Continuous | UpdateMode::Reactive { .. } => true,
-                        UpdateMode::ReactiveLowPower { .. } => {
-                            tao_state.low_power_event
-                                || tao_state.redraw_request_sent
-                                || tao_state.timeout_reached
-                        }
-                    }
-                } else {
-                    false
-                };
-
-                if update && finished_and_setup_done {
+                if finished_and_setup_done {
                     tao_state.last_update = Instant::now();
                     app.update();
                 }
             }
             Event::RedrawEventsCleared => {
-                {
-                    // Fetch from world
-                    let (tao_config, window_focused_query) = focused_window_state.get(&app.world);
-
-                    // True if _any_ windows are currently being focused
-                    let app_focused = window_focused_query.iter().any(|window| window.focused);
-
-                    let now = Instant::now();
-                    use UpdateMode::*;
-                    *control_flow = match tao_config.update_mode(app_focused) {
-                        Continuous => ControlFlow::Poll,
-                        Reactive { max_wait } | ReactiveLowPower { max_wait } => {
-                            if let Some(instant) = now.checked_add(*max_wait) {
-                                ControlFlow::WaitUntil(instant)
-                            } else {
-                                ControlFlow::Wait
-                            }
-                        }
-                    };
-                }
+                *control_flow = ControlFlow::Poll;
 
                 // This block needs to run after `app.update()` in `MainEventsCleared`. Otherwise,
                 // we won't be able to see redraw requests until the next event, defeating the
@@ -742,28 +588,8 @@ pub fn tao_runner(mut app: App) {
         }
 
         if tao_state.active {
-            #[cfg(not(target_arch = "wasm32"))]
-            let (
-                commands,
-                mut new_windows,
-                created_window_writer,
-                tao_windows,
-                // adapters,
-                // handlers,
-                accessibility_requested,
-            ) = create_window_system_state.get_mut(&mut app.world);
-
-            #[cfg(target_arch = "wasm32")]
-            let (
-                commands,
-                mut new_windows,
-                created_window_writer,
-                tao_windows,
-                // adapters,
-                // handlers,
-                accessibility_requested,
-                canvas_parent_resize_channel,
-            ) = create_window_system_state.get_mut(&mut app.world);
+            let (commands, mut new_windows, created_window_writer, tao_windows) =
+                create_window_system_state.get_mut(&mut app.world);
 
             // Responsible for creating new windows
             create_window(
@@ -772,11 +598,6 @@ pub fn tao_runner(mut app: App) {
                 new_windows.iter_mut(),
                 created_window_writer,
                 tao_windows,
-                // adapters,
-                // handlers,
-                accessibility_requested,
-                #[cfg(target_arch = "wasm32")]
-                canvas_parent_resize_channel,
             );
 
             create_window_system_state.apply(&mut app.world);

@@ -1,86 +1,95 @@
 #![allow(clippy::type_complexity)]
 #![warn(missing_docs)]
-//! `bevy_winit` provides utilities to handle window creation and the eventloop through [`winit`]
+//! `bevy::wry::application` provides utilities to handle window creation and the eventloop through [`wry::application`]
 //!
-//! Most commonly, the [`WinitPlugin`] is used as part of
+//! Most commonly, the [`taoPlugin`] is used as part of
 //! [`DefaultPlugins`](https://docs.rs/bevy/latest/bevy/struct.DefaultPlugins.html).
-//! The app's [runner](bevy_app::App::runner) is set by `WinitPlugin` and handles the `winit` [`EventLoop`](winit::event_loop::EventLoop).
-//! See `winit_runner` for details.
+//! The app's [runner](bevy::app::App::runner) is set by `taoPlugin` and handles the `wry::application` [`EventLoop`](wry::application::event_loop::EventLoop).
+//! See `tao_runner` for details.
 
-mod systems;
+// pub mod accessibility;
+mod converters;
+mod system;
+mod tao_config;
+mod tao_windows;
+#[cfg(target_arch = "wasm32")]
+mod web_resize;
 
-use bevy::{
-    a11y::AccessibilityRequested,
-    app::{App, AppExit, Last, Plugin},
-    ecs::{
-        event::{Events, ManualEventReader},
-        prelude::*,
-        system::{SystemParam, SystemState},
-    },
-    input::{
-        keyboard::KeyboardInput,
-        mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
-        touch::TouchInput,
-        touchpad::{TouchpadMagnify, TouchpadRotate},
-    },
-    math::{ivec2, DVec2, Vec2},
-    tasks::tick_global_task_pools_on_main_thread,
-    utils::{
-        tracing::{trace, warn},
-        Instant,
-    },
-    window::{
-        exit_on_all_closed, CursorEntered, CursorLeft, CursorMoved, FileDragAndDrop, Ime,
-        ReceivedCharacter, RequestRedraw, Window, WindowBackendScaleFactorChanged,
-        WindowCloseRequested, WindowCreated, WindowDestroyed, WindowFocused, WindowMoved,
-        WindowResized, WindowScaleFactorChanged, WindowThemeChanged,
-    },
+use bevy::a11y::AccessibilityRequested;
+use bevy::ecs::system::{SystemParam, SystemState};
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::tasks::tick_global_task_pools_on_main_thread;
+use system::{changed_window, create_window, despawn_window, CachedWindow};
+
+pub use tao_config::*;
+pub use tao_windows::*;
+
+use bevy::app::{App, AppExit, Last, Plugin};
+use bevy::ecs::event::{Events, ManualEventReader};
+use bevy::ecs::prelude::*;
+use bevy::input::{
+    keyboard::KeyboardInput,
+    mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
+    touch::TouchInput,
+    touchpad::{TouchpadMagnify, TouchpadRotate},
 };
-use systems::{changed_window, create_window, despawn_window, CachedWindow};
+use bevy::math::{ivec2, DVec2, Vec2};
+use bevy::utils::{
+    tracing::{trace, warn},
+    Instant,
+};
+use bevy::window::{
+    exit_on_all_closed, CursorEntered, CursorLeft, CursorMoved, FileDragAndDrop, Ime,
+    ReceivedCharacter, RequestRedraw, Window, WindowBackendScaleFactorChanged,
+    WindowCloseRequested, WindowCreated, WindowDestroyed, WindowFocused, WindowMoved,
+    WindowResized, WindowScaleFactorChanged, WindowThemeChanged,
+};
 
 #[cfg(target_os = "android")]
-pub use winit::platform::android::activity::AndroidApp;
+pub use wry::application::platform::android::activity::AndroidApp;
 
 use wry::application::{
     event::{self, DeviceEvent, Event, StartCause, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopWindowTarget},
+    event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
 
-use crate::accessibility::{AccessKitAdapters, AccessibilityPlugin, WinitActionHandlers};
+// use crate::accessibility::{
+//     taoActionHandlers, AccessKitAdapters, AccessibilityPlugin,
+// };
 
-use crate::converters::convert_winit_theme;
+use converters::convert_tao_theme;
 #[cfg(target_arch = "wasm32")]
-use crate::web_resize::{CanvasParentResizeEventChannel, CanvasParentResizePlugin};
+use web_resize::{CanvasParentResizeEventChannel, CanvasParentResizePlugin};
 
 /// [`AndroidApp`] provides an interface to query the application state as well as monitor events (for example lifecycle and input events)
 #[cfg(target_os = "android")]
 pub static ANDROID_APP: std::sync::OnceLock<AndroidApp> = std::sync::OnceLock::new();
 
-/// A [`Plugin`] that utilizes [`winit`] for window creation and event loop management.
+/// A [`Plugin`] that utilizes [`wry::application`] for window creation and event loop management.
 #[derive(Default)]
-pub struct WinitPlugin;
+pub struct TaoPlugin;
 
-impl Plugin for WinitPlugin {
+impl Plugin for TaoPlugin {
     fn build(&self, app: &mut App) {
-        let mut event_loop_builder = EventLoopBuilder::<()>::with_user_event();
+        let mut event_loop_builder = EventLoop::<()>::with_user_event();
 
         #[cfg(target_os = "android")]
         {
-            use winit::platform::android::EventLoopBuilderExtAndroid;
+            use wry::application::platform::android::EventLoopBuilderExtAndroid;
             event_loop_builder.with_android_app(
                 ANDROID_APP
                     .get()
-                    .expect("Bevy must be setup with the #[bevy_main] macro on Android")
+                    .expect("Bevy must be setup with the #[bevy::main] macro on Android")
                     .clone(),
             );
         }
 
-        let event_loop = event_loop_builder.build();
+        let event_loop = event_loop_builder;
         app.insert_non_send_resource(event_loop);
 
-        app.init_non_send_resource::<WinitWindows>()
-            .init_resource::<WinitSettings>()
-            .set_runner(winit_runner)
+        app.init_non_send_resource::<TaoWindows>()
+            .init_resource::<TaoSettings>()
+            .set_runner(tao_runner)
             // exit_on_all_closed only uses the query to determine if the query is empty,
             // and so doesn't care about ordering relative to changed_window
             .add_systems(
@@ -92,8 +101,6 @@ impl Plugin for WinitPlugin {
                 ),
             );
 
-        app.add_plugins(AccessibilityPlugin);
-
         #[cfg(target_arch = "wasm32")]
         app.add_plugins(CanvasParentResizePlugin);
 
@@ -103,9 +110,9 @@ impl Plugin for WinitPlugin {
             NonSendMut<EventLoop<()>>,
             Query<(Entity, &mut Window)>,
             EventWriter<WindowCreated>,
-            NonSendMut<WinitWindows>,
-            NonSendMut<AccessKitAdapters>,
-            ResMut<WinitActionHandlers>,
+            NonSendMut<TaoWindows>,
+            // NonSendMut<AccessKitAdapters>,
+            // ResMut<taoActionHandlers>,
             ResMut<AccessibilityRequested>,
         )> = SystemState::from_world(&mut app.world);
 
@@ -115,9 +122,9 @@ impl Plugin for WinitPlugin {
             NonSendMut<EventLoop<()>>,
             Query<(Entity, &mut Window)>,
             EventWriter<WindowCreated>,
-            NonSendMut<WinitWindows>,
-            NonSendMut<AccessKitAdapters>,
-            ResMut<WinitActionHandlers>,
+            NonSendMut<TaoWindows>,
+            // NonSendMut<AccessKitAdapters>,
+            // ResMut<taoActionHandlers>,
             ResMut<AccessibilityRequested>,
             ResMut<CanvasParentResizeEventChannel>,
         )> = SystemState::from_world(&mut app.world);
@@ -132,9 +139,9 @@ impl Plugin for WinitPlugin {
                 event_loop,
                 mut new_windows,
                 event_writer,
-                winit_windows,
-                adapters,
-                handlers,
+                tao_windows,
+                // adapters,
+                // handlers,
                 accessibility_requested,
             ) = create_window_system_state.get_mut(&mut app.world);
 
@@ -144,14 +151,14 @@ impl Plugin for WinitPlugin {
                 event_loop,
                 mut new_windows,
                 event_writer,
-                winit_windows,
-                adapters,
-                handlers,
+                tao_windows,
+                // adapters,
+                // handlers,
                 accessibility_requested,
                 event_channel,
             ) = create_window_system_state.get_mut(&mut app.world);
 
-            // Here we need to create a winit-window and give it a WindowHandle which the renderer can use.
+            // Here we need to create a wry::application-window and give it a WindowHandle which the renderer can use.
             // It needs to be spawned before the start of the startup schedule, so we cannot use a regular system.
             // Instead we need to create the window and spawn it using direct world access
             create_window(
@@ -159,9 +166,9 @@ impl Plugin for WinitPlugin {
                 &event_loop,
                 new_windows.iter_mut(),
                 event_writer,
-                winit_windows,
-                adapters,
-                handlers,
+                tao_windows,
+                // adapters,
+                // handlers,
                 accessibility_requested,
                 #[cfg(target_arch = "wasm32")]
                 event_channel,
@@ -195,7 +202,7 @@ fn run_return<F>(event_loop: &mut EventLoop<()>, event_handler: F)
 where
     F: FnMut(Event<'_, ()>, &EventLoopWindowTarget<()>, &mut ControlFlow),
 {
-    use winit::platform::run_return::EventLoopExtRunReturn;
+    use wry::application::platform::run_return::EventLoopExtRunReturn;
     event_loop.run_return(event_handler);
 }
 
@@ -253,12 +260,12 @@ struct CursorEvents<'w> {
 //     target_os = "netbsd",
 //     target_os = "openbsd"
 // ))]
-// pub fn winit_runner_any_thread(app: App) {
-//     winit_runner_with(app, EventLoop::new_any_thread());
+// pub fn tao_runner_any_thread(app: App) {
+//     tao_runner_with(app, EventLoop::new_any_thread());
 // }
 
 /// Stores state that must persist between frames.
-struct WinitPersistentState {
+struct TaoPersistentState {
     /// Tracks whether or not the application is active or suspended.
     active: bool,
     /// Tracks whether or not an event has occurred this frame that would trigger an update in low
@@ -271,7 +278,7 @@ struct WinitPersistentState {
     timeout_reached: bool,
     last_update: Instant,
 }
-impl Default for WinitPersistentState {
+impl Default for TaoPersistentState {
     fn default() -> Self {
         Self {
             active: false,
@@ -283,10 +290,10 @@ impl Default for WinitPersistentState {
     }
 }
 
-/// The default [`App::runner`] for the [`WinitPlugin`] plugin.
+/// The default [`App::runner`] for the [`TaoPlugin`] plugin.
 ///
-/// Overriding the app's [runner](bevy_app::App::runner) while using `WinitPlugin` will bypass the `EventLoop`.
-pub fn winit_runner(mut app: App) {
+/// Overriding the app's [runner](bevy::app::App::runner) while using `taoPlugin` will bypass the `EventLoop`.
+pub fn tao_runner(mut app: App) {
     // We remove this so that we have ownership over it.
     let mut event_loop = app
         .world
@@ -295,15 +302,15 @@ pub fn winit_runner(mut app: App) {
 
     let mut app_exit_event_reader = ManualEventReader::<AppExit>::default();
     let mut redraw_event_reader = ManualEventReader::<RequestRedraw>::default();
-    let mut winit_state = WinitPersistentState::default();
+    let mut tao_state = TaoPersistentState::default();
     app.world
         .insert_non_send_resource(event_loop.create_proxy());
 
-    let return_from_run = app.world.resource::<WinitSettings>().return_from_run;
+    let return_from_run = app.world.resource::<TaoSettings>().return_from_run;
 
-    trace!("Entering winit event loop");
+    trace!("Entering wry::application event loop");
 
-    let mut focused_window_state: SystemState<(Res<WinitSettings>, Query<&Window>)> =
+    let mut focused_window_state: SystemState<(Res<TaoSettings>, Query<&Window>)> =
         SystemState::from_world(&mut app.world);
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -311,9 +318,9 @@ pub fn winit_runner(mut app: App) {
         Commands,
         Query<(Entity, &mut Window), Added<Window>>,
         EventWriter<WindowCreated>,
-        NonSendMut<WinitWindows>,
-        NonSendMut<AccessKitAdapters>,
-        ResMut<WinitActionHandlers>,
+        NonSendMut<TaoWindows>,
+        // NonSendMut<AccessKitAdapters>,
+        // ResMut<TaoActionHandlers>,
         ResMut<AccessibilityRequested>,
     )> = SystemState::from_world(&mut app.world);
 
@@ -322,9 +329,9 @@ pub fn winit_runner(mut app: App) {
         Commands,
         Query<(Entity, &mut Window), Added<Window>>,
         EventWriter<WindowCreated>,
-        NonSendMut<WinitWindows>,
-        NonSendMut<AccessKitAdapters>,
-        ResMut<WinitActionHandlers>,
+        NonSendMut<TaoWindows>,
+        // NonSendMut<AccessKitAdapters>,
+        // ResMut<taoActionHandlers>,
         ResMut<AccessibilityRequested>,
         ResMut<CanvasParentResizeEventChannel>,
     )> = SystemState::from_world(&mut app.world);
@@ -335,7 +342,7 @@ pub fn winit_runner(mut app: App) {
                               event_loop: &EventLoopWindowTarget<()>,
                               control_flow: &mut ControlFlow| {
         #[cfg(feature = "trace")]
-        let _span = bevy_utils::tracing::info_span!("winit event_handler").entered();
+        let _span = bevy::utils::tracing::info_span!("tao event_handler").entered();
 
         if !finished_and_setup_done {
             if !app.ready() {
@@ -357,35 +364,35 @@ pub fn winit_runner(mut app: App) {
 
         match event {
             event::Event::NewEvents(start) => {
-                let (winit_config, window_focused_query) = focused_window_state.get(&app.world);
+                let (tao_config, window_focused_query) = focused_window_state.get(&app.world);
 
                 let app_focused = window_focused_query.iter().any(|window| window.focused);
 
-                // Check if either the `WaitUntil` timeout was triggered by winit, or that same
+                // Check if either the `WaitUntil` timeout was triggered by wry::application, or that same
                 // amount of time has elapsed since the last app update. This manual check is needed
                 // because we don't know if the criteria for an app update were met until the end of
                 // the frame.
                 let auto_timeout_reached = matches!(start, StartCause::ResumeTimeReached { .. });
                 let now = Instant::now();
-                let manual_timeout_reached = match winit_config.update_mode(app_focused) {
+                let manual_timeout_reached = match tao_config.update_mode(app_focused) {
                     UpdateMode::Continuous => false,
                     UpdateMode::Reactive { max_wait }
                     | UpdateMode::ReactiveLowPower { max_wait } => {
-                        now.duration_since(winit_state.last_update) >= *max_wait
+                        now.duration_since(tao_state.last_update) >= *max_wait
                     }
                 };
                 // The low_power_event state and timeout must be reset at the start of every frame.
-                winit_state.low_power_event = false;
-                winit_state.timeout_reached = auto_timeout_reached || manual_timeout_reached;
+                tao_state.low_power_event = false;
+                tao_state.timeout_reached = auto_timeout_reached || manual_timeout_reached;
             }
             event::Event::WindowEvent {
                 event,
-                window_id: winit_window_id,
+                window_id: tao_window_id,
                 ..
             } => {
                 // Fetch and prepare details from the world
                 let mut system_state: SystemState<(
-                    NonSend<WinitWindows>,
+                    NonSend<TaoWindows>,
                     Query<(&mut Window, &mut CachedWindow)>,
                     WindowEvents,
                     InputEvents,
@@ -393,7 +400,7 @@ pub fn winit_runner(mut app: App) {
                     EventWriter<FileDragAndDrop>,
                 )> = SystemState::new(&mut app.world);
                 let (
-                    winit_windows,
+                    tao_windows,
                     mut window_query,
                     mut window_events,
                     mut input_events,
@@ -403,12 +410,12 @@ pub fn winit_runner(mut app: App) {
 
                 // Entity of this window
                 let window_entity =
-                    if let Some(entity) = winit_windows.get_window_entity(winit_window_id) {
+                    if let Some(entity) = tao_windows.get_window_entity(tao_window_id) {
                         entity
                     } else {
                         warn!(
-                            "Skipped event {:?} for unknown winit Window Id {:?}",
-                            event, winit_window_id
+                            "Skipped event {:?} for unknown wry::application Window Id {:?}",
+                            event, tao_window_id
                         );
                         return;
                     };
@@ -424,7 +431,7 @@ pub fn winit_runner(mut app: App) {
                         return;
                     };
 
-                winit_state.low_power_event = true;
+                tao_state.low_power_event = true;
 
                 match event {
                     WindowEvent::Resized(size) => {
@@ -445,10 +452,10 @@ pub fn winit_runner(mut app: App) {
                                 window: window_entity,
                             });
                     }
-                    WindowEvent::KeyboardInput { ref input, .. } => {
+                    WindowEvent::KeyboardInput { ref event, .. } => {
                         input_events
                             .keyboard_input
-                            .send(converters::convert_keyboard_input(input, window_entity));
+                            .send(converters::convert_keyboard_input(event, window_entity));
                     }
                     WindowEvent::CursorMoved { position, .. } => {
                         let physical_position = DVec2::new(position.x, position.y);
@@ -480,16 +487,16 @@ pub fn winit_runner(mut app: App) {
                             window: window_entity,
                         });
                     }
-                    WindowEvent::TouchpadMagnify { delta, .. } => {
-                        input_events
-                            .touchpad_magnify_input
-                            .send(TouchpadMagnify(delta as f32));
-                    }
-                    WindowEvent::TouchpadRotate { delta, .. } => {
-                        input_events
-                            .touchpad_rotate_input
-                            .send(TouchpadRotate(delta));
-                    }
+                    // WindowEvent::TouchpadMagnify { delta, .. } => {
+                    //     input_events
+                    //         .touchpad_magnify_input
+                    //         .send(TouchpadMagnify(delta as f32));
+                    // }
+                    // WindowEvent::TouchpadRotate { delta, .. } => {
+                    //     input_events
+                    //         .touchpad_rotate_input
+                    //         .send(TouchpadRotate(delta));
+                    // }
                     WindowEvent::MouseWheel { delta, .. } => match delta {
                         event::MouseScrollDelta::LineDelta(x, y) => {
                             input_events.mouse_wheel_input.send(MouseWheel {
@@ -507,6 +514,7 @@ pub fn winit_runner(mut app: App) {
                                 window: window_entity,
                             });
                         }
+                        _ => unimplemented!("tao added a new variant to MouseScrollDelta"),
                     },
                     WindowEvent::Touch(touch) => {
                         let location = touch.location.to_logical(window.resolution.scale_factor());
@@ -516,10 +524,10 @@ pub fn winit_runner(mut app: App) {
                             .touch_input
                             .send(converters::convert_touch_input(touch, location));
                     }
-                    WindowEvent::ReceivedCharacter(c) => {
+                    WindowEvent::ReceivedImeText(c) => {
                         input_events.character_input.send(ReceivedCharacter {
                             window: window_entity,
-                            char: c,
+                            char: c.chars().next().unwrap(),
                         });
                     }
                     WindowEvent::ScaleFactorChanged {
@@ -542,9 +550,11 @@ pub fn winit_runner(mut app: App) {
                             // Otherwise, use the OS suggested size
                             // We have already told the OS about our resize constraints, so
                             // the new_inner_size should take those into account
-                            *new_inner_size =
-                                winit::dpi::LogicalSize::new(window.width(), window.height())
-                                    .to_physical::<u32>(forced_factor);
+                            *new_inner_size = wry::application::dpi::LogicalSize::new(
+                                window.width(),
+                                window.height(),
+                            )
+                            .to_physical::<u32>(forced_factor);
                             // TODO: Should this not trigger a WindowsScaleFactorChanged?
                         } else if approx::relative_ne!(new_factor, prior_factor) {
                             // Trigger a change event if they are approximately different
@@ -607,29 +617,29 @@ pub fn winit_runner(mut app: App) {
                             position,
                         });
                     }
-                    WindowEvent::Ime(event) => match event {
-                        event::Ime::Preedit(value, cursor) => {
-                            input_events.ime_input.send(Ime::Preedit {
-                                window: window_entity,
-                                value,
-                                cursor,
-                            });
-                        }
-                        event::Ime::Commit(value) => input_events.ime_input.send(Ime::Commit {
-                            window: window_entity,
-                            value,
-                        }),
-                        event::Ime::Enabled => input_events.ime_input.send(Ime::Enabled {
-                            window: window_entity,
-                        }),
-                        event::Ime::Disabled => input_events.ime_input.send(Ime::Disabled {
-                            window: window_entity,
-                        }),
-                    },
+                    // WindowEvent::Ime(event) => match event {
+                    //     event::Ime::Preedit(value, cursor) => {
+                    //         input_events.ime_input.send(Ime::Preedit {
+                    //             window: window_entity,
+                    //             value,
+                    //             cursor,
+                    //         });
+                    //     }
+                    //     event::Ime::Commit(value) => input_events.ime_input.send(Ime::Commit {
+                    //         window: window_entity,
+                    //         value,
+                    //     }),
+                    //     event::Ime::Enabled => input_events.ime_input.send(Ime::Enabled {
+                    //         window: window_entity,
+                    //     }),
+                    //     event::Ime::Disabled => input_events.ime_input.send(Ime::Disabled {
+                    //         window: window_entity,
+                    //     }),
+                    // },
                     WindowEvent::ThemeChanged(theme) => {
                         window_events.window_theme_changed.send(WindowThemeChanged {
                             window: window_entity,
-                            theme: convert_winit_theme(theme),
+                            theme: convert_tao_theme(theme),
                         });
                     }
                     WindowEvent::Destroyed => {
@@ -645,7 +655,7 @@ pub fn winit_runner(mut app: App) {
                 }
             }
             event::Event::DeviceEvent {
-                event: DeviceEvent::MouseMotion { delta: (x, y) },
+                event: DeviceEvent::MouseMotion { delta: (x, y), .. },
                 ..
             } => {
                 let mut system_state: SystemState<EventWriter<MouseMotion>> =
@@ -657,7 +667,7 @@ pub fn winit_runner(mut app: App) {
                 });
             }
             event::Event::Suspended => {
-                winit_state.active = false;
+                tao_state.active = false;
                 #[cfg(target_os = "android")]
                 {
                     // Bevy doesn't support suspend/resume so we just exit
@@ -667,20 +677,20 @@ pub fn winit_runner(mut app: App) {
                 }
             }
             event::Event::Resumed => {
-                winit_state.active = true;
+                tao_state.active = true;
             }
             event::Event::MainEventsCleared => {
-                let (winit_config, window_focused_query) = focused_window_state.get(&app.world);
+                let (tao_config, window_focused_query) = focused_window_state.get(&app.world);
 
-                let update = if winit_state.active {
+                let update = if tao_state.active {
                     // True if _any_ windows are currently being focused
                     let app_focused = window_focused_query.iter().any(|window| window.focused);
-                    match winit_config.update_mode(app_focused) {
+                    match tao_config.update_mode(app_focused) {
                         UpdateMode::Continuous | UpdateMode::Reactive { .. } => true,
                         UpdateMode::ReactiveLowPower { .. } => {
-                            winit_state.low_power_event
-                                || winit_state.redraw_request_sent
-                                || winit_state.timeout_reached
+                            tao_state.low_power_event
+                                || tao_state.redraw_request_sent
+                                || tao_state.timeout_reached
                         }
                     }
                 } else {
@@ -688,21 +698,21 @@ pub fn winit_runner(mut app: App) {
                 };
 
                 if update && finished_and_setup_done {
-                    winit_state.last_update = Instant::now();
+                    tao_state.last_update = Instant::now();
                     app.update();
                 }
             }
             Event::RedrawEventsCleared => {
                 {
                     // Fetch from world
-                    let (winit_config, window_focused_query) = focused_window_state.get(&app.world);
+                    let (tao_config, window_focused_query) = focused_window_state.get(&app.world);
 
                     // True if _any_ windows are currently being focused
                     let app_focused = window_focused_query.iter().any(|window| window.focused);
 
                     let now = Instant::now();
                     use UpdateMode::*;
-                    *control_flow = match winit_config.update_mode(app_focused) {
+                    *control_flow = match tao_config.update_mode(app_focused) {
                         Continuous => ControlFlow::Poll,
                         Reactive { max_wait } | ReactiveLowPower { max_wait } => {
                             if let Some(instant) = now.checked_add(*max_wait) {
@@ -725,21 +735,21 @@ pub fn winit_runner(mut app: App) {
                     }
                 }
 
-                winit_state.redraw_request_sent = redraw;
+                tao_state.redraw_request_sent = redraw;
             }
 
             _ => (),
         }
 
-        if winit_state.active {
+        if tao_state.active {
             #[cfg(not(target_arch = "wasm32"))]
             let (
                 commands,
                 mut new_windows,
                 created_window_writer,
-                winit_windows,
-                adapters,
-                handlers,
+                tao_windows,
+                // adapters,
+                // handlers,
                 accessibility_requested,
             ) = create_window_system_state.get_mut(&mut app.world);
 
@@ -748,9 +758,9 @@ pub fn winit_runner(mut app: App) {
                 commands,
                 mut new_windows,
                 created_window_writer,
-                winit_windows,
-                adapters,
-                handlers,
+                tao_windows,
+                // adapters,
+                // handlers,
                 accessibility_requested,
                 canvas_parent_resize_channel,
             ) = create_window_system_state.get_mut(&mut app.world);
@@ -761,9 +771,9 @@ pub fn winit_runner(mut app: App) {
                 event_loop,
                 new_windows.iter_mut(),
                 created_window_writer,
-                winit_windows,
-                adapters,
-                handlers,
+                tao_windows,
+                // adapters,
+                // handlers,
                 accessibility_requested,
                 #[cfg(target_arch = "wasm32")]
                 canvas_parent_resize_channel,
@@ -773,7 +783,7 @@ pub fn winit_runner(mut app: App) {
         }
     };
 
-    // If true, returns control from Winit back to the main Bevy loop
+    // If true, returns control from wry::application back to the main Bevy loop
     if return_from_run {
         run_return(&mut event_loop, event_handler);
     } else {

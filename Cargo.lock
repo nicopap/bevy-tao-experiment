@@ -4542,6 +4542,7 @@ dependencies = [
 name = "wrytaobevy"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "bevy",
  "raw-window-handle",
  "wry",

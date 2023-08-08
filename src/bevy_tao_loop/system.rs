@@ -15,16 +15,19 @@ use bevy::window::{RawHandleWrapper, Window, WindowClosed, WindowCreated};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use wry::application::{
+    self as tao,
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
     event_loop::EventLoopWindowTarget,
 };
 
 #[cfg(target_arch = "wasm32")]
-use crate::web_resize::{CanvasParentResizeEventChannel, WINIT_CANVAS_SELECTOR};
-use crate::{
-    accessibility::{AccessKitAdapters, WinitActionHandlers},
-    converters::{self, convert_window_level, convert_window_theme, convert_winit_theme},
-    get_best_videomode, get_fitting_videomode, WinitWindows,
+use super::web_resize::{CanvasParentResizeEventChannel, WINIT_CANVAS_SELECTOR};
+use super::{
+    // accessibility::{AccessKitAdapters, WinitActionHandlers},
+    converters::{self, convert_tao_theme, convert_window_theme, set_window_level},
+    get_best_videomode,
+    get_fitting_videomode,
+    TaoWindows,
 };
 
 /// System responsible for creating new windows whenever a [`Window`] component is added
@@ -37,14 +40,14 @@ pub(crate) fn create_window<'a>(
     event_loop: &EventLoopWindowTarget<()>,
     created_windows: impl Iterator<Item = (Entity, Mut<'a, Window>)>,
     mut event_writer: EventWriter<WindowCreated>,
-    mut winit_windows: NonSendMut<WinitWindows>,
-    mut adapters: NonSendMut<AccessKitAdapters>,
-    mut handlers: ResMut<WinitActionHandlers>,
+    mut tao_windows: NonSendMut<TaoWindows>,
+    // mut adapters: NonSendMut<AccessKitAdapters>,
+    // mut handlers: ResMut<WinitActionHandlers>,
     mut accessibility_requested: ResMut<AccessibilityRequested>,
     #[cfg(target_arch = "wasm32")] event_channel: ResMut<CanvasParentResizeEventChannel>,
 ) {
     for (entity, mut window) in created_windows {
-        if winit_windows.get_window(entity).is_some() {
+        if tao_windows.get_window(entity).is_some() {
             continue;
         }
 
@@ -54,27 +57,25 @@ pub(crate) fn create_window<'a>(
             entity
         );
 
-        let winit_window = winit_windows.create_window(
+        let tao_window = tao_windows.create_window(
             event_loop,
             entity,
             &window,
-            &mut adapters,
-            &mut handlers,
+            // &mut adapters,
+            // &mut handlers,
             &mut accessibility_requested,
         );
 
-        if let Some(theme) = winit_window.theme() {
-            window.window_theme = Some(convert_winit_theme(theme));
-        }
+        window.window_theme = Some(convert_tao_theme(tao_window.theme()));
 
         window
             .resolution
-            .set_scale_factor(winit_window.scale_factor());
+            .set_scale_factor(tao_window.scale_factor());
         commands
             .entity(entity)
             .insert(RawHandleWrapper {
-                window_handle: winit_window.raw_window_handle(),
-                display_handle: winit_window.raw_display_handle(),
+                window_handle: tao_window.raw_window_handle(),
+                display_handle: tao_window.raw_display_handle(),
             })
             .insert(CachedWindow {
                 window: window.clone(),
@@ -104,14 +105,14 @@ pub(crate) fn despawn_window(
     mut closed: RemovedComponents<Window>,
     window_entities: Query<&Window>,
     mut close_events: EventWriter<WindowClosed>,
-    mut winit_windows: NonSendMut<WinitWindows>,
+    mut tao_windows: NonSendMut<TaoWindows>,
 ) {
     for window in closed.iter() {
         info!("Closing window {:?}", window);
         // Guard to verify that the window is in fact actually gone,
         // rather than having the component added and removed in the same frame.
         if !window_entities.contains(window) {
-            winit_windows.remove_window(window);
+            tao_windows.remove_window(window);
             close_events.send(WindowClosed { window });
         }
     }
@@ -132,36 +133,36 @@ pub struct CachedWindow {
 //   event channel stuff.
 pub(crate) fn changed_window(
     mut changed_windows: Query<(Entity, &mut Window, &mut CachedWindow), Changed<Window>>,
-    winit_windows: NonSendMut<WinitWindows>,
+    tao_windows: NonSendMut<TaoWindows>,
 ) {
     for (entity, mut window, mut cache) in &mut changed_windows {
-        if let Some(winit_window) = winit_windows.get_window(entity) {
+        if let Some(tao_window) = tao_windows.get_window(entity) {
             if window.title != cache.window.title {
-                winit_window.set_title(window.title.as_str());
+                tao_window.set_title(window.title.as_str());
             }
 
             if window.mode != cache.window.mode {
                 let new_mode = match window.mode {
-                    bevy_window::WindowMode::BorderlessFullscreen => {
-                        Some(winit::window::Fullscreen::Borderless(None))
+                    bevy::window::WindowMode::BorderlessFullscreen => {
+                        Some(tao::window::Fullscreen::Borderless(None))
                     }
-                    bevy_window::WindowMode::Fullscreen => {
-                        Some(winit::window::Fullscreen::Exclusive(get_best_videomode(
-                            &winit_window.current_monitor().unwrap(),
+                    bevy::window::WindowMode::Fullscreen => {
+                        Some(tao::window::Fullscreen::Exclusive(get_best_videomode(
+                            &tao_window.current_monitor().unwrap(),
                         )))
                     }
-                    bevy_window::WindowMode::SizedFullscreen => {
-                        Some(winit::window::Fullscreen::Exclusive(get_fitting_videomode(
-                            &winit_window.current_monitor().unwrap(),
+                    bevy::window::WindowMode::SizedFullscreen => {
+                        Some(tao::window::Fullscreen::Exclusive(get_fitting_videomode(
+                            &tao_window.current_monitor().unwrap(),
                             window.width() as u32,
                             window.height() as u32,
                         )))
                     }
-                    bevy_window::WindowMode::Windowed => None,
+                    bevy::window::WindowMode::Windowed => None,
                 };
 
-                if winit_window.fullscreen() != new_mode {
-                    winit_window.set_fullscreen(new_mode);
+                if tao_window.fullscreen() != new_mode {
+                    tao_window.set_fullscreen(new_mode);
                 }
             }
             if window.resolution != cache.window.resolution {
@@ -169,12 +170,12 @@ pub(crate) fn changed_window(
                     window.resolution.physical_width(),
                     window.resolution.physical_height(),
                 );
-                winit_window.set_inner_size(physical_size);
+                tao_window.set_inner_size(physical_size);
             }
 
             if window.physical_cursor_position() != cache.window.physical_cursor_position() {
                 if let Some(physical_position) = window.physical_cursor_position() {
-                    let inner_size = winit_window.inner_size();
+                    let inner_size = tao_window.inner_size();
 
                     let position = PhysicalPosition::new(
                         physical_position.x,
@@ -182,26 +183,26 @@ pub(crate) fn changed_window(
                         inner_size.height as f32 - physical_position.y,
                     );
 
-                    if let Err(err) = winit_window.set_cursor_position(position) {
+                    if let Err(err) = tao_window.set_cursor_position(position) {
                         error!("could not set cursor position: {:?}", err);
                     }
                 }
             }
 
             if window.cursor.icon != cache.window.cursor.icon {
-                winit_window.set_cursor_icon(converters::convert_cursor_icon(window.cursor.icon));
+                tao_window.set_cursor_icon(converters::convert_cursor_icon(window.cursor.icon));
             }
 
             if window.cursor.grab_mode != cache.window.cursor.grab_mode {
-                crate::winit_windows::attempt_grab(winit_window, window.cursor.grab_mode);
+                super::tao_windows::attempt_grab(tao_window, window.cursor.grab_mode);
             }
 
             if window.cursor.visible != cache.window.cursor.visible {
-                winit_window.set_cursor_visible(window.cursor.visible);
+                tao_window.set_cursor_visible(window.cursor.visible);
             }
 
             if window.cursor.hit_test != cache.window.cursor.hit_test {
-                if let Err(err) = winit_window.set_cursor_hittest(window.cursor.hit_test) {
+                if let Err(err) = tao_window.set_ignore_cursor_events(window.cursor.hit_test) {
                     window.cursor.hit_test = cache.window.cursor.hit_test;
                     warn!(
                         "Could not set cursor hit test for window {:?}: {:?}",
@@ -211,15 +212,15 @@ pub(crate) fn changed_window(
             }
 
             if window.decorations != cache.window.decorations
-                && window.decorations != winit_window.is_decorated()
+                && window.decorations != tao_window.is_decorated()
             {
-                winit_window.set_decorations(window.decorations);
+                tao_window.set_decorations(window.decorations);
             }
 
             if window.resizable != cache.window.resizable
-                && window.resizable != winit_window.is_resizable()
+                && window.resizable != tao_window.is_resizable()
             {
-                winit_window.set_resizable(window.resizable);
+                tao_window.set_resizable(window.resizable);
             }
 
             if window.resize_constraints != cache.window.resize_constraints {
@@ -233,45 +234,45 @@ pub(crate) fn changed_window(
                     height: constraints.max_height,
                 };
 
-                winit_window.set_min_inner_size(Some(min_inner_size));
+                tao_window.set_min_inner_size(Some(min_inner_size));
                 if constraints.max_width.is_finite() && constraints.max_height.is_finite() {
-                    winit_window.set_max_inner_size(Some(max_inner_size));
+                    tao_window.set_max_inner_size(Some(max_inner_size));
                 }
             }
 
             if window.position != cache.window.position {
-                if let Some(position) = crate::winit_window_position(
+                if let Some(position) = super::tao_window_position(
                     &window.position,
                     &window.resolution,
-                    winit_window.available_monitors(),
-                    winit_window.primary_monitor(),
-                    winit_window.current_monitor(),
+                    tao_window.available_monitors(),
+                    tao_window.primary_monitor(),
+                    tao_window.current_monitor(),
                 ) {
-                    let should_set = match winit_window.outer_position() {
+                    let should_set = match tao_window.outer_position() {
                         Ok(current_position) => current_position != position,
                         _ => true,
                     };
 
                     if should_set {
-                        winit_window.set_outer_position(position);
+                        tao_window.set_outer_position(position);
                     }
                 }
             }
 
             if let Some(maximized) = window.internal.take_maximize_request() {
-                winit_window.set_maximized(maximized);
+                tao_window.set_maximized(maximized);
             }
 
             if let Some(minimized) = window.internal.take_minimize_request() {
-                winit_window.set_minimized(minimized);
+                tao_window.set_minimized(minimized);
             }
 
             if window.focused != cache.window.focused && window.focused {
-                winit_window.focus_window();
+                tao_window.set_focus();
             }
 
             if window.window_level != cache.window.window_level {
-                winit_window.set_window_level(convert_window_level(window.window_level));
+                set_window_level(window.window_level, tao_window);
             }
 
             // Currently unsupported changes
@@ -290,20 +291,20 @@ pub(crate) fn changed_window(
                 );
             }
 
-            if window.ime_enabled != cache.window.ime_enabled {
-                winit_window.set_ime_allowed(window.ime_enabled);
-            }
+            // if window.ime_enabled != cache.window.ime_enabled {
+            //     tao_window.set_ime_position(window.ime_enabled);
+            // }
 
             if window.ime_position != cache.window.ime_position {
-                winit_window.set_ime_position(LogicalPosition::new(
+                tao_window.set_ime_position(LogicalPosition::new(
                     window.ime_position.x,
                     window.ime_position.y,
                 ));
             }
 
-            if window.window_theme != cache.window.window_theme {
-                winit_window.set_theme(window.window_theme.map(convert_window_theme));
-            }
+            // if window.window_theme != cache.window.window_theme {
+            //     tao_window.theme(window.window_theme.map(convert_window_theme));
+            // }
 
             cache.window = window.clone();
         }

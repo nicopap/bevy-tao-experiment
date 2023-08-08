@@ -1,12 +1,12 @@
-use bevy::a11y::AccessibilityRequested;
 use bevy::ecs::{
     entity::Entity,
     event::EventWriter,
     prelude::{Changed, Component, Resource},
     removal_detection::RemovedComponents,
-    system::{Commands, NonSendMut, Query, ResMut},
+    system::{Commands, NonSendMut, Query},
     world::Mut,
 };
+use bevy::log;
 use bevy::utils::{
     tracing::{error, info, warn},
     HashMap,
@@ -20,11 +20,9 @@ use wry::application::{
     event_loop::EventLoopWindowTarget,
 };
 
-#[cfg(target_arch = "wasm32")]
-use super::web_resize::{CanvasParentResizeEventChannel, WINIT_CANVAS_SELECTOR};
 use super::{
     // accessibility::{AccessKitAdapters, WinitActionHandlers},
-    converters::{self, convert_tao_theme, convert_window_theme, set_window_level},
+    converters::{self, convert_tao_theme, set_window_level},
     get_best_videomode,
     get_fitting_videomode,
     TaoWindows,
@@ -34,17 +32,12 @@ use super::{
 /// to an entity.
 ///
 /// This will default any necessary components if they are not already added.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_window<'a>(
     mut commands: Commands,
     event_loop: &EventLoopWindowTarget<()>,
     created_windows: impl Iterator<Item = (Entity, Mut<'a, Window>)>,
     mut event_writer: EventWriter<WindowCreated>,
     mut tao_windows: NonSendMut<TaoWindows>,
-    // mut adapters: NonSendMut<AccessKitAdapters>,
-    // mut handlers: ResMut<WinitActionHandlers>,
-    mut accessibility_requested: ResMut<AccessibilityRequested>,
-    #[cfg(target_arch = "wasm32")] event_channel: ResMut<CanvasParentResizeEventChannel>,
 ) {
     for (entity, mut window) in created_windows {
         if tao_windows.get_window(entity).is_some() {
@@ -57,14 +50,7 @@ pub(crate) fn create_window<'a>(
             entity
         );
 
-        let tao_window = tao_windows.create_window(
-            event_loop,
-            entity,
-            &window,
-            // &mut adapters,
-            // &mut handlers,
-            &mut accessibility_requested,
-        );
+        let tao_window = tao_windows.create_window(event_loop, entity, &window);
 
         window.window_theme = Some(convert_tao_theme(tao_window.theme()));
 
@@ -73,25 +59,13 @@ pub(crate) fn create_window<'a>(
             .set_scale_factor(tao_window.scale_factor());
         commands
             .entity(entity)
-            .insert(RawHandleWrapper {
+            .insert(dbg!(RawHandleWrapper {
                 window_handle: tao_window.raw_window_handle(),
                 display_handle: tao_window.raw_display_handle(),
-            })
+            }))
             .insert(CachedWindow {
                 window: window.clone(),
             });
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            if window.fit_canvas_to_parent {
-                let selector = if let Some(selector) = &window.canvas {
-                    selector
-                } else {
-                    WINIT_CANVAS_SELECTOR
-                };
-                event_channel.listen_to_selector(entity, selector);
-            }
-        }
 
         event_writer.send(WindowCreated { window: entity });
     }
@@ -136,6 +110,7 @@ pub(crate) fn changed_window(
     tao_windows: NonSendMut<TaoWindows>,
 ) {
     for (entity, mut window, mut cache) in &mut changed_windows {
+        log::trace!("A window changed");
         if let Some(tao_window) = tao_windows.get_window(entity) {
             if window.title != cache.window.title {
                 tao_window.set_title(window.title.as_str());
@@ -280,14 +255,6 @@ pub(crate) fn changed_window(
                 window.transparent = cache.window.transparent;
                 warn!(
                     "Winit does not currently support updating transparency after window creation."
-                );
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            if window.canvas != cache.window.canvas {
-                window.canvas = cache.window.canvas.clone();
-                warn!(
-                    "Bevy currently doesn't support modifying the window canvas after initialization."
                 );
             }
 

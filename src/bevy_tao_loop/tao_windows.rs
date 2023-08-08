@@ -1,10 +1,5 @@
 #![warn(missing_docs)]
 
-// use accesskit_tao::Adapter;
-use bevy::a11y::{
-    accesskit::{NodeBuilder, NodeClassSet, Role},
-    AccessKitEntityExt, AccessibilityRequested,
-};
 use bevy::ecs::entity::Entity;
 
 use bevy::utils::{tracing::warn, HashMap};
@@ -16,7 +11,7 @@ use wry::application::{
     monitor::{MonitorHandle, VideoMode},
 };
 
-use super::converters::{convert_window_theme, set_window_level};
+use super::converters::convert_window_theme;
 
 /// A resource which maps window entities to [`winit`] library windows.
 #[derive(Debug, Default)]
@@ -41,15 +36,8 @@ impl TaoWindows {
         event_loop: &tao::event_loop::EventLoopWindowTarget<()>,
         entity: Entity,
         window: &Window,
-        // adapters: &mut AccessKitAdapters,
-        // handlers: &mut TaoActionHandlers,
-        accessibility_requested: &mut AccessibilityRequested,
     ) -> &tao::window::Window {
         let mut tao_window_builder = tao::window::WindowBuilder::new();
-
-        // Due to a UIA limitation, winit windows need to be invisible for the
-        // AccessKit adapter is initialized.
-        tao_window_builder = tao_window_builder.with_visible(false);
 
         tao_window_builder = match window.mode {
             WindowMode::BorderlessFullscreen => tao_window_builder.with_fullscreen(Some(
@@ -90,8 +78,7 @@ impl TaoWindows {
         tao_window_builder = tao_window_builder
             .with_theme(window.window_theme.map(convert_window_theme))
             .with_resizable(window.resizable)
-            .with_decorations(window.decorations)
-            .with_transparent(window.transparent);
+            .with_decorations(window.decorations);
 
         let constraints = window.resize_constraints.check_constraints();
         let min_inner_size = LogicalSize {
@@ -112,43 +99,8 @@ impl TaoWindows {
                 tao_window_builder.with_min_inner_size(min_inner_size)
             };
 
-        #[allow(unused_mut)]
-        let mut tao_window_builder = tao_window_builder.with_title(window.title.as_str());
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            use wasm_bindgen::JsCast;
-            use winit::platform::web::WindowBuilderExtWebSys;
-
-            if let Some(selector) = &window.canvas {
-                let window = web_sys::window().unwrap();
-                let document = window.document().unwrap();
-                let canvas = document
-                    .query_selector(&selector)
-                    .expect("Cannot query for canvas element.");
-                if let Some(canvas) = canvas {
-                    let canvas = canvas.dyn_into::<web_sys::HtmlCanvasElement>().ok();
-                    tao_window_builder = tao_window_builder.with_canvas(canvas);
-                } else {
-                    panic!("Cannot find element: {}.", selector);
-                }
-            }
-
-            tao_window_builder =
-                tao_window_builder.with_prevent_default(window.prevent_default_event_handling)
-        }
-
-        let mut tao_window = tao_window_builder.build(event_loop).unwrap();
-        set_window_level(window.window_level, &mut tao_window);
-        let name = window.title.clone();
-
-        let mut root_builder = NodeBuilder::new(Role::Window);
-        root_builder.set_name(name.into_boxed_str());
-        let root = root_builder.build(&mut NodeClassSet::lock_global());
-
-        let accesskit_window_id = entity.to_node_id();
-        let accessibility_requested = (*accessibility_requested).clone();
-        tao_window.set_visible(true);
+        let tao_window_builder = tao_window_builder.with_title(window.title.as_str());
+        let tao_window = dbg!(tao_window_builder).build(event_loop).unwrap();
 
         // Do not set the grab mode on window creation if it's none, this can fail on mobile
         if window.cursor.grab_mode != CursorGrabMode::None {
@@ -170,22 +122,6 @@ impl TaoWindows {
 
         self.entity_to_tao.insert(entity, tao_window.id());
         self.tao_to_entity.insert(tao_window.id(), entity);
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            use winit::platform::web::WindowExtWebSys;
-
-            if window.canvas.is_none() {
-                let canvas = tao_window.canvas();
-
-                let window = web_sys::window().unwrap();
-                let document = window.document().unwrap();
-                let body = document.body().unwrap();
-
-                body.append_child(&canvas)
-                    .expect("Append canvas to HTML body.");
-            }
-        }
 
         self.windows
             .entry(tao_window.id())
@@ -341,9 +277,3 @@ pub fn tao_window_position(
         }
     }
 }
-
-// WARNING: this only works under the assumption that wasm runtime is single threaded
-#[cfg(target_arch = "wasm32")]
-unsafe impl Send for TaoWindows {}
-#[cfg(target_arch = "wasm32")]
-unsafe impl Sync for TaoWindows {}

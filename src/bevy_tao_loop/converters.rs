@@ -184,7 +184,6 @@ pub fn convert_virtual_key_code(virtual_key_code: Key) -> Option<KeyCode> {
         Key::Power => KeyCode::Power,
         Key::MediaTrackPrevious => KeyCode::PrevTrack,
         Key::Tab => KeyCode::Tab,
-        Key::Pause => KeyCode::Sleep,
         Key::BrowserStop => KeyCode::Stop,
         Key::AudioVolumeDown => KeyCode::VolumeDown,
         Key::AudioVolumeUp => KeyCode::VolumeUp,

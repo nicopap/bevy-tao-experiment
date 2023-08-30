@@ -28,6 +28,9 @@ use super::{
     TaoWindows,
 };
 
+#[derive(Resource)]
+pub struct WebviewRawHandles(pub RawHandleWrapper);
+
 /// System responsible for creating new windows whenever a [`Window`] component is added
 /// to an entity.
 ///
@@ -50,6 +53,8 @@ pub(crate) fn create_window<'a>(
             entity
         );
 
+        // TODO(clean): hackish, relies on -wq
+        let insert_webview_resource = tao_windows.webview.is_none();
         let tao_window = tao_windows.create_window(event_loop, entity, &window);
 
         window.window_theme = Some(convert_tao_theme(tao_window.theme()));
@@ -67,6 +72,9 @@ pub(crate) fn create_window<'a>(
                 window: window.clone(),
             });
 
+        if insert_webview_resource {
+            commands.insert_resource(WebviewRawHandles(tao_windows.webview_surface().unwrap()));
+        }
         event_writer.send(WindowCreated { window: entity });
     }
 }

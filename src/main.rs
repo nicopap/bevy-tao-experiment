@@ -3,20 +3,19 @@
 // SPDX-License-Identifier: MIT
 
 mod bevy_tao_loop;
+mod render;
 
-use std::f32::consts::PI;
-
-use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 
 fn main() {
     App::new()
         .add_plugins((
             DefaultPlugins.set(bevy::log::LogPlugin {
-                level: bevy::log::Level::INFO,
+                level: bevy::log::Level::TRACE,
                 filter: "wgpu_core=warn".to_string(),
             }),
             bevy_tao_loop::TaoPlugin,
+            render::RenderPlugin,
         ))
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, setup)

@@ -1,55 +1,89 @@
 #![warn(missing_docs)]
 
+use core::fmt;
+
 use bevy::ecs::entity::Entity;
 
 use bevy::utils::{tracing::warn, HashMap};
-use bevy::window::{CursorGrabMode, Window, WindowMode, WindowPosition, WindowResolution};
+use bevy::window::{
+    CursorGrabMode, RawHandleWrapper, Window as BevyWindow, WindowMode, WindowPosition,
+    WindowResolution,
+};
 
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+use wry::application::window::Fullscreen;
 use wry::application::{
     self as tao,
     dpi::{LogicalSize, PhysicalPosition},
     monitor::{MonitorHandle, VideoMode},
+    window::{Window as TaoWindow, WindowBuilder as TaoWindowBuilder, WindowId as TaoWindowId},
 };
+use wry::webview::WebView;
 
 use super::converters::convert_window_theme;
 
 /// A resource which maps window entities to [`winit`] library windows.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct TaoWindows {
+    pub webview: Option<WebView>,
     /// Stores [`winit`] windows by window identifier.
-    pub windows: HashMap<tao::window::WindowId, tao::window::Window>,
+    pub windows: HashMap<TaoWindowId, TaoWindow>,
     /// Maps entities to `winit` window identifiers.
-    pub entity_to_tao: HashMap<Entity, tao::window::WindowId>,
+    pub entity_to_tao: HashMap<Entity, TaoWindowId>,
     /// Maps `winit` window identifiers to entities.
-    pub tao_to_entity: HashMap<tao::window::WindowId, Entity>,
+    pub tao_to_entity: HashMap<TaoWindowId, Entity>,
 
     // Some winit functions, such as `set_window_icon` can only be used from the main thread. If
     // they are used in another thread, the app will hang. This marker ensures `TaoWindows` is
     // only ever accessed with bevy's non-send functions and in NonSend systems.
     _not_send_sync: core::marker::PhantomData<*const ()>,
 }
+impl fmt::Debug for TaoWindows {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaoWindows")
+            .field("webview_is_some", &self.webview.is_some())
+            .field("windows", &self.windows)
+            .field("entity_to_tao", &self.entity_to_tao)
+            .field("tao_to_entity", &self.tao_to_entity)
+            .finish()
+    }
+}
 
 impl TaoWindows {
-    /// Creates a `winit` window and associates it with our entity.
+    pub fn webview_surface(&self) -> Option<RawHandleWrapper> {
+        self.webview.as_ref().map(|wv| RawHandleWrapper {
+            window_handle: wv.window().raw_window_handle(),
+            display_handle: wv.window().raw_display_handle(),
+        })
+    }
+    /// Creates a `tao` window and associates it with our entity.
     pub fn create_window(
         &mut self,
         event_loop: &tao::event_loop::EventLoopWindowTarget<()>,
         entity: Entity,
-        window: &Window,
-    ) -> &tao::window::Window {
-        let mut tao_window_builder = tao::window::WindowBuilder::new();
+        window: &BevyWindow,
+    ) -> &TaoWindow {
+        if self.webview.is_none() {
+            self.webview = Some(
+                WebView::new(
+                    TaoWindowBuilder::new()
+                        .with_visible(false)
+                        .build(event_loop)
+                        .unwrap(),
+                )
+                .unwrap(),
+            );
+        }
+        let mut tao_window_builder = TaoWindowBuilder::new();
 
         tao_window_builder = match window.mode {
-            WindowMode::BorderlessFullscreen => tao_window_builder.with_fullscreen(Some(
-                tao::window::Fullscreen::Borderless(event_loop.primary_monitor()),
+            WindowMode::BorderlessFullscreen => tao_window_builder
+                .with_fullscreen(Some(Fullscreen::Borderless(event_loop.primary_monitor()))),
+            WindowMode::Fullscreen => tao_window_builder.with_fullscreen(Some(
+                Fullscreen::Exclusive(get_best_videomode(&event_loop.primary_monitor().unwrap())),
             )),
-            WindowMode::Fullscreen => {
-                tao_window_builder.with_fullscreen(Some(tao::window::Fullscreen::Exclusive(
-                    get_best_videomode(&event_loop.primary_monitor().unwrap()),
-                )))
-            }
             WindowMode::SizedFullscreen => tao_window_builder.with_fullscreen(Some(
-                tao::window::Fullscreen::Exclusive(get_fitting_videomode(
+                Fullscreen::Exclusive(get_fitting_videomode(
                     &event_loop.primary_monitor().unwrap(),
                     window.width() as u32,
                     window.height() as u32,
@@ -90,7 +124,7 @@ impl TaoWindows {
             height: constraints.max_height,
         };
 
-        let tao_window_builder =
+        tao_window_builder =
             if constraints.max_width.is_finite() && constraints.max_height.is_finite() {
                 tao_window_builder
                     .with_min_inner_size(min_inner_size)
@@ -100,7 +134,7 @@ impl TaoWindows {
             };
 
         let tao_window_builder = tao_window_builder.with_title(window.title.as_str());
-        let tao_window = dbg!(tao_window_builder).build(event_loop).unwrap();
+        let tao_window = tao_window_builder.build(event_loop).unwrap();
 
         // Do not set the grab mode on window creation if it's none, this can fail on mobile
         if window.cursor.grab_mode != CursorGrabMode::None {
@@ -130,7 +164,7 @@ impl TaoWindows {
     }
 
     /// Get the winit window that is associated with our entity.
-    pub fn get_window(&self, entity: Entity) -> Option<&tao::window::Window> {
+    pub fn get_window(&self, entity: Entity) -> Option<&TaoWindow> {
         self.entity_to_tao
             .get(&entity)
             .and_then(|tao_id| self.windows.get(tao_id))
@@ -139,14 +173,14 @@ impl TaoWindows {
     /// Get the entity associated with the winit window id.
     ///
     /// This is mostly just an intermediary step between us and winit.
-    pub fn get_window_entity(&self, tao_id: tao::window::WindowId) -> Option<Entity> {
+    pub fn get_window_entity(&self, tao_id: TaoWindowId) -> Option<Entity> {
         self.tao_to_entity.get(&tao_id).cloned()
     }
 
     /// Remove a window from winit.
     ///
     /// This should mostly just be called when the window is closing.
-    pub fn remove_window(&mut self, entity: Entity) -> Option<tao::window::Window> {
+    pub fn remove_window(&mut self, entity: Entity) -> Option<TaoWindow> {
         let tao_id = self.entity_to_tao.remove(&entity)?;
         // Don't remove from tao_to_window_id, to track that we used to know about this winit window
         self.windows.remove(&tao_id)
@@ -201,7 +235,7 @@ pub fn get_best_videomode(monitor: &MonitorHandle) -> VideoMode {
     modes.first().unwrap().clone()
 }
 
-pub(crate) fn attempt_grab(tao_window: &tao::window::Window, grab_mode: CursorGrabMode) {
+pub(crate) fn attempt_grab(tao_window: &TaoWindow, grab_mode: CursorGrabMode) {
     let grab_result = match grab_mode {
         bevy::window::CursorGrabMode::None => tao_window.set_cursor_grab(false),
         bevy::window::CursorGrabMode::Confined => tao_window.set_cursor_grab(true),
@@ -230,7 +264,7 @@ pub fn tao_window_position(
 ) -> Option<PhysicalPosition<i32>> {
     match position {
         WindowPosition::Automatic => {
-            /* Window manager will handle position */
+            /* BevyWindow manager will handle position */
             None
         }
         WindowPosition::Centered(monitor_selection) => {

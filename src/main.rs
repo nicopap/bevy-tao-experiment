@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+mod bad_render;
 mod bevy_tao_loop;
-mod render;
 
+use bad_render as render;
 use bevy::prelude::*;
 
 fn main() {

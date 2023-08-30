@@ -58,10 +58,12 @@ fn prepare_webview(
     webview: Option<Res<ExtractedWebviewHandles>>,
     mut webview_surface: Local<Option<WebviewSurface>>,
 ) {
-    let Some(webview) = webview else { return; };
+    let Some(webview) = webview else {
+        return;
+    };
     let webview_surface = if let Some(wvs) = &mut *webview_surface {
         reconfigure_surface(
-            &wvs,
+            &wvs.surface,
             webview.window_data,
             &render_device,
             &render_adapter,
@@ -165,8 +167,8 @@ fn configure_surface(
     let frame = surface
         .get_current_texture()
         .expect("Error configuring surface");
-    window.set_swapchain_texture(frame);
-    window.swap_chain_texture_format = Some(surface_data.format);
+    surface.set_swapchain_texture(frame);
+    surface.swap_chain_texture_format = Some(format);
 }
 fn reconfigure_surface(
     surface: &Surface,
@@ -207,7 +209,7 @@ fn reconfigure_surface(
         }
         #[cfg(target_os = "linux")]
         Err(wgpu::SurfaceError::Timeout) if may_erroneously_timeout() => {
-            bevy_utils::tracing::trace!(
+            bevy::utils::tracing::trace!(
                 "Couldn't get swap chain texture. This is probably a quirk \
                         of your Linux GPU driver, so it can be safely ignored."
             );

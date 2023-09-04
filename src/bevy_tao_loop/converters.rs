@@ -8,8 +8,8 @@ use bevy::input::{
 use bevy::math::Vec2;
 use bevy::window::{CursorIcon, WindowLevel, WindowTheme};
 
-use wry::application::window::Window;
-use wry::application::{self as tao, event::KeyEvent, keyboard::Key};
+use tao::window::Window;
+use tao::{event::KeyEvent, keyboard::Key};
 
 pub fn convert_keyboard_input(keyboard_input: &KeyEvent, window: Entity) -> KeyboardInput {
     KeyboardInput {

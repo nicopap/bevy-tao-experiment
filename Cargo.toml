@@ -14,4 +14,4 @@ bevy = { version = "0.11.0", default-features = false, features = [
   "zstd",
 ]}
 raw-window-handle = "0.5.2"
-wry = "0.30.0"
+tao = "0.22.2"

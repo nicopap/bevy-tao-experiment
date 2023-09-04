@@ -14,8 +14,7 @@ use bevy::utils::{
 use bevy::window::{RawHandleWrapper, Window, WindowClosed, WindowCreated};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-use wry::application::{
-    self as tao,
+use tao::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
     event_loop::EventLoopWindowTarget,
 };

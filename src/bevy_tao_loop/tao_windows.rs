@@ -5,8 +5,7 @@ use bevy::ecs::entity::Entity;
 use bevy::utils::{tracing::warn, HashMap};
 use bevy::window::{CursorGrabMode, Window, WindowMode, WindowPosition, WindowResolution};
 
-use wry::application::{
-    self as tao,
+use tao::{
     dpi::{LogicalSize, PhysicalPosition},
     monitor::{MonitorHandle, VideoMode},
 };

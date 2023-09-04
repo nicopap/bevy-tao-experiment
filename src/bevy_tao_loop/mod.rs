@@ -1,10 +1,10 @@
 #![allow(clippy::type_complexity)]
 #![warn(missing_docs)]
-//! `bevy::wry::application` provides utilities to handle window creation and the eventloop through [`wry::application`]
+//! `bevy::tao` provides utilities to handle window creation and the eventloop through [`tao`]
 //!
 //! Most commonly, the [`taoPlugin`] is used as part of
 //! [`DefaultPlugins`](https://docs.rs/bevy/latest/bevy/struct.DefaultPlugins.html).
-//! The app's [runner](bevy::app::App::runner) is set by `taoPlugin` and handles the `wry::application` [`EventLoop`](wry::application::event_loop::EventLoop).
+//! The app's [runner](bevy::app::App::runner) is set by `taoPlugin` and handles the `tao` [`EventLoop`](tao::event_loop::EventLoop).
 //! See `tao_runner` for details.
 
 // pub mod accessibility;
@@ -38,7 +38,7 @@ use bevy::window::{
     WindowThemeChanged,
 };
 
-use wry::application::{
+use tao::{
     event::{self, DeviceEvent, Event, StartCause, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
@@ -49,13 +49,13 @@ use wry::application::{
 
 use converters::convert_tao_theme;
 
-/// A [`Plugin`] that utilizes [`wry::application`] for window creation and event loop management.
+/// A [`Plugin`] that utilizes [`tao`] for window creation and event loop management.
 #[derive(Default)]
 pub struct TaoPlugin;
 
 impl Plugin for TaoPlugin {
     fn build(&self, app: &mut App) {
-        let event_loop = EventLoop::<()>::with_user_event();
+        let event_loop = EventLoop::new();
         app.insert_non_send_resource(event_loop);
 
         app.init_non_send_resource::<TaoWindows>()
@@ -126,7 +126,7 @@ fn run_return<F>(event_loop: &mut EventLoop<()>, event_handler: F)
 where
     F: FnMut(Event<'_, ()>, &EventLoopWindowTarget<()>, &mut ControlFlow),
 {
-    use wry::application::platform::run_return::EventLoopExtRunReturn;
+    use tao::platform::run_return::EventLoopExtRunReturn;
     event_loop.run_return(event_handler);
 }
 
@@ -304,7 +304,7 @@ pub fn tao_runner(mut app: App) {
                         entity
                     } else {
                         error!(
-                            "Skipped event {:?} for unknown wry::application Window Id {:?}",
+                            "Skipped event {:?} for unknown tao Window Id {:?}",
                             event, tao_window_id
                         );
                         return;
@@ -439,11 +439,9 @@ pub fn tao_runner(mut app: App) {
                             // Otherwise, use the OS suggested size
                             // We have already told the OS about our resize constraints, so
                             // the new_inner_size should take those into account
-                            *new_inner_size = wry::application::dpi::LogicalSize::new(
-                                window.width(),
-                                window.height(),
-                            )
-                            .to_physical::<u32>(forced_factor);
+                            *new_inner_size =
+                                tao::dpi::LogicalSize::new(window.width(), window.height())
+                                    .to_physical::<u32>(forced_factor);
                             // TODO: Should this not trigger a WindowsScaleFactorChanged?
                         } else if approx::relative_ne!(new_factor, prior_factor) {
                             // Trigger a change event if they are approximately different
@@ -604,7 +602,7 @@ pub fn tao_runner(mut app: App) {
         }
     };
 
-    // If true, returns control from wry::application back to the main Bevy loop
+    // If true, returns control from tao back to the main Bevy loop
     if return_from_run {
         run_return(&mut event_loop, event_handler);
     } else {
